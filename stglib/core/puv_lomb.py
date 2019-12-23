@@ -1,3 +1,4 @@
+# note that for this module to be found, stglib\__init__.py needs to include puv_lomb in from .core import
 import scipy.signal as spsig
 from astropy.timeseries import LombScargle
 import numpy as np
@@ -7,9 +8,10 @@ from stglib.core.waves import test_variances
 import xarray as xr
 import matplotlib.pyplot as plt
 
-def puv_lomb(time, pressure, u, v, depth, height_of_pressure, height_of_velocity, sampling_frequency, fft_length=512,
-              rho=1025., first_frequency_cutoff=1 / 50, infra_gravity_cutoff=0.05, last_frequency_cutoff=1 / 5,
-              fft_window_type='hanning', show_diagnostic_plot=False, check_variances=False, variance_error=0.0,
+def puv_lomb(time, pressure, u, v, depth, height_of_pressure, height_of_velocity, sampling_frequency,
+              rho=1025., first_frequency_cutoff=1 / 50, infra_gravity_cutoff=0.05,
+              last_frequency_cutoff=1 / 5, frequency_resolution=0.001,
+              show_diagnostic_plot=False, check_variances=False, variance_error=0.0,
               overlap_length='default'):
     """
     Determine wave heights from pressure, east_velocity, v velocity data
@@ -32,18 +34,16 @@ def puv_lomb(time, pressure, u, v, depth, height_of_pressure, height_of_velocity
         Height of velocity sensor off bottom (m, positive number)
     sampling_frequency : float
         Hz
-    fft_length : int
-        Length of data to window and process
     rho : float
         Water density (kg/m^3)
-    fft_window_type : str
-        Data fft_window for spectral calculation, per scipy signal package
     first_frequency_cutoff : float
         Low-frequency cutoff for wave motions
     infra_gravity_cutoff : float
         Infra-gravity wave frequency cutoff
     last_frequency_cutoff : float
         High-frequency cutoff for wave motions
+    frequency_resolution : float
+        resolution desired, Hz, for precision of Lomb Scargle computation
     show_diagnostic_plot : bool
         print plots and other checks
     check_variances : bool
@@ -89,31 +89,43 @@ def puv_lomb(time, pressure, u, v, depth, height_of_pressure, height_of_velocity
     """
 
     gravity = 9.81  # m/s^2
-    if fft_window_type is 'hanning':
-        fft_window_type = 'hann'  # this is just the way scipy signal likes it
-    if overlap_length is "default":
-        overlap_length = int(np.floor(fft_length / 2))
 
-    pressure = spsig.detrend(pressure)
-    u = spsig.detrend(u)
-    v = spsig.detrend(v)
+    # pressure = spsig.detrend(pressure)
+    # u = spsig.detrend(u)
+    # v = spsig.detrend(v)
 
     # compute wave height from velocities
+
+    # with Lomb Scargle, we should use the entire time series in one block.
+    # fft_length is needed for later calculations, not for Lomb Scargle periodogram
+    fft_length = len(time)
+
+    # we want to provide a probably set of frequencies to examine.
+    # http: // jakevdp.github.io / lombscargle / lombscargle / quickstart.html
+    # "Note that the fastest Lomb-Scargle implementation requires regularly-spaced frequencies;
+    # if frequencies are irregularly-spaced, a slower method will be used instead."
+    number_of_frequencies = (last_frequency_cutoff-first_frequency_cutoff)/frequency_resolution
+    frequencies = np.linspace(first_frequency_cutoff, last_frequency_cutoff, number_of_frequencies)
 
     # Determine velocity spectra for u and v
     # [frequencies, Gpp] = spsig.welch(rho * gravity * pressure, fs=sampling_frequency, window=fft_window_type,
     #                                nperseg=fft_length, noverlap=overlap_length)
-    frequencies, Gpp = LombScargle(time, rho * gravity * pressure).autopower()
+    # frequencies, Gpp = LombScargle(time, rho * gravity * pressure).autopower()
+    Gpp = LombScargle(time, rho * gravity * pressure).power(frequencies)
 
-    df = frequencies[2] - frequencies[1]
+    # df = frequencies[2] - frequencies[1]
+    df = frequency_resolution
     # [_, Guu] = spsig.welch(u, fs=sampling_frequency, window=fft_window_type, nperseg=fft_length,
     #                       noverlap=overlap_length)
     # [_, Gvv] = spsig.welch(v, fs=sampling_frequency, window=fft_window_type, nperseg=fft_length,
     #                       noverlap=overlap_length)
-    _, Guu = LombScargle(time, u).autopower()
-    _, Gvv = LombScargle(time, v).autopower()
+    # _, Guu = LombScargle(time, u).autopower()
+    Guu = LombScargle(time, u).power(frequencies)
+    # _, Gvv = LombScargle(time, v).autopower()
+    Gvv = LombScargle(time, v).power(frequencies)
 
     # determine wave number
+    # omega = angular wave frequency
     omega = np.array([2 * np.pi * x for x in frequencies])  # omega must be numpy array for qkfs
     # catch numpy errors
     np.seterr(divide='ignore', invalid='ignore')
@@ -129,24 +141,50 @@ def puv_lomb(time, pressure, u, v, depth, height_of_pressure, height_of_velocity
     Huv = np.ones(nf)
 
     # change wavenumber at 0 Hz to 1 to avoid divide by zero
-    i = np.array(range(nf))  # this is an index, thus needs to start at first element, in this case 0
+    # i = np.array(range(nf))  # this is an index, thus needs to start at first element, in this case 0
     # for some reason in the MATLAB version CRS tests omega for nans instead of k.
     # Here we test k also because that's where the nans show up
     if np.isnan(omega[0]) or np.isnan(k[0]) or (omega[0] <= 0):  # 0 Hz is the first element
-        i = i[1:]
+        # i = i[1:]
+        i = range(1, nf)
         Hp[0] = 1
         Huv[0] = 1
+    else:
+        i = range(nf)
+
+    # compute height from pressure and orbital
+    # I was getting Hmo far too large.
+    # from my doNDwavesLomb.m, Sandwich mooring 10811
+    # in development for the CWTM paper, I have this note:
+    #   % confirmed: Chris' desired transfer function ratio is instrument depth / site depth
+    #   % thus when the pressure spectra are divided by the transfer
+    #   % function, energy should be increased (e.g. Hp < 1).
+    #   % Gpp is normally the output of p_welch.m, now living in advlib
+    #   % where p is p*rho*g but we don't do that with Lomb so omit rho*g here
+    #   % this should be OK because in Welch the energy will be
+    #   % squared, and in the denominator below, it is also squared
+    #   % Hp(i,1) = rho*g .* ( cosh(kzp(i,1)) ./ cosh(kh(i,1)) );
+    #   % confirmed: rho*g not needed here, we are using pressure data
 
     Hp[i] = rho * gravity * (np.cosh(kzp[i]) / np.cosh(kh[i]))
+    # Hp = np.cosh(kzp) / np.cosh(kh)
+    # Hp[i] = np.cosh(kzp[i]) / np.cosh(kh[i])
+    # Huv[i] = omega[i] * (np.cosh(kzuv[i]) / np.sinh(kh[i]))
+    # Huv = omega * (np.cosh(kzuv) / np.sinh(kh))
     Huv[i] = omega[i] * (np.cosh(kzuv[i]) / np.sinh(kh[i]))
 
     # combine horizontal velocity spectra
     Guv = Guu + Gvv
 
+    # with Lomb Scargle power(), we defined the cutoff and frequency domain from the start
     # create cut off frequency, so noise is not magnified
     # at least in first testing, subtracting 1 here got closer to the intended freq. cutoff value
-    ff = np.argmax(frequencies > first_frequency_cutoff) - 1
-    lf = np.argmax(frequencies > last_frequency_cutoff)
+    # ff = np.argmax(frequencies > first_frequency_cutoff) - 1
+    ff = 0
+    # lf = np.argmax(frequencies > last_frequency_cutoff)
+    lf = len(frequencies)-1
+    # print(f'ff = {ff}')
+    # print(f'lf = {lf}')
 
     # Determine wave height for velocity spectra
     Snp = Gpp[ff:lf] / (Hp[ff:lf] ** 2)
@@ -200,7 +238,7 @@ def puv_lomb(time, pressure, u, v, depth, height_of_pressure, height_of_velocity
 
     # Freq. bands for variance contributions
     ig = np.max(np.where(frequencies <= infra_gravity_cutoff))
-    # low freq, infragravity, high-freq
+    # low freq, infra-gravity, high-freq
     if 1 < ff:
         ublo = np.sqrt(2 * np.sum(Guv[1:ff] * df))
     else:

@@ -8,7 +8,7 @@ from . import indexvel
 from . import core
 from . import troll
 from . import argonaut
-from .core import utils, cmd, waves
+from .core import utils, cmd, waves, puv_lomb
 from .core.utils import read_globalatts
 
 from ._version import get_versions
