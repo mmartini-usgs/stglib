@@ -7,6 +7,7 @@ matrix:
   include:
   - env: CONDA_ENV=py36
   - env: CONDA_ENV=py37
+  - env: CONDA_ENV=py38
 
 install:
 
@@ -31,5 +32,4 @@ install:
 script:
   - which python
   - python --version
-  - pytest stglib/tests/test_puv_quick.py
-  - python -m unittest discover stglib/tests
+  - pytest

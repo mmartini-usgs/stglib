@@ -14,6 +14,13 @@ import sqlite3
 import stglib
 
 
+def is_cf(ds):
+    if ('Conventions' in ds.attrs) and (str(ds.attrs['Conventions']) == 'CF-1.6'):
+       return True
+    else:
+       return False
+
+
 def clip_ds(ds, wvs=False):
     """
     Clip an xarray Dataset from metadata, either via good_ens or
@@ -47,7 +54,7 @@ def clip_ds(ds, wvs=False):
 
         ds = ds.isel(time=goods)
 
-        histtext = 'Data clipped using good_ens values of {} . '.format(
+        histtext = 'Data clipped using good_ens values of {}. '.format(
             str(good_ens))
 
         ds = insert_history(ds, histtext)
@@ -60,7 +67,7 @@ def clip_ds(ds, wvs=False):
 
         ds = ds.isel(time=goods)
 
-        histtext = 'Data clipped using good_ens_wvs values of {} . '.format(
+        histtext = 'Data clipped using good_ens_wvs values of {}. '.format(
             str(good_ens))
 
         ds = insert_history(ds, histtext)
@@ -80,7 +87,7 @@ def clip_ds(ds, wvs=False):
         ds = ds.sel(time=slice(ds.attrs['good_dates'][0],
                                ds.attrs['good_dates'][1]))
 
-        histtext = 'Data clipped using good_dates of {} . '.format(
+        histtext = 'Data clipped using good_dates of {}. '.format(
             ds.attrs['good_dates'])
 
         ds = insert_history(ds, histtext)
@@ -145,11 +152,9 @@ def insert_history(ds, histtext):
 
 
 def add_history(ds):
-    if (
-        ('cf' in ds.attrs and str(ds.attrs['cf']) == '1.6') or
-        ('CF' in ds.attrs and str(ds.attrs['CF']) == '1.6')
-       ):
-        histtext = 'Processed to CF using {}. '.format(
+    if is_cf(ds):
+        histtext = 'Processed to {} using {}. '.format(
+            ds.attrs['Conventions'],
             os.path.basename(sys.argv[0]))
     else:
         histtext = 'Processed to EPIC using {}. '.format(
@@ -212,15 +217,19 @@ def ds_add_attrs(ds):
         'standard_name': 'time',
         'axis': 'T'})
 
-    ds['epic_time'].attrs.update({
-        'units': 'True Julian Day',
-        'type': 'EVEN',
-        'epic_code': 624})
+    ds['time'].encoding['dtype'] = 'i4'
 
-    ds['epic_time2'].attrs.update({
-        'units': 'msec since 0:00 GMT',
-        'type': 'EVEN',
-        'epic_code': 624})
+    if 'epic_time' in ds:
+        ds['epic_time'].attrs.update({
+            'units': 'True Julian Day',
+            'type': 'EVEN',
+            'epic_code': 624})
+
+    if 'epic_time2' in ds:
+        ds['epic_time2'].attrs.update({
+            'units': 'msec since 0:00 GMT',
+            'type': 'EVEN',
+            'epic_code': 624})
 
     def add_attributes(var, dsattrs):
         var.attrs.update({
@@ -437,10 +446,7 @@ def rename_time(ds):
     Rename time variables for EPIC compliance, keeping a time_cf coorindate.
     """
 
-    if (
-        ('cf' in ds.attrs and str(ds.attrs['cf']) == '1.6') or
-        ('CF' in ds.attrs and str(ds.attrs['CF']) == '1.6')
-       ):
+    if is_cf(ds):
         pass
     else:
         ds = ds.rename({'time': 'time_cf'})
@@ -455,10 +461,8 @@ def rename_time(ds):
 
 
 def rename_time_2d(nc_filename, ds):
-    if (
-        ('cf' in ds.attrs and str(ds.attrs['cf']) == '1.6') or
-        ('CF' in ds.attrs and str(ds.attrs['CF']) == '1.6')
-       ):
+    if is_cf(ds):
+        print('not renaming 2D time because CF==1.6')
         pass
     else:
         # Need to do this in two steps after renaming the variable.
@@ -482,7 +486,7 @@ def open_time_2d_dataset(filename):
     with xr.open_dataset(filename,
                          decode_times=False,
                          drop_variables='time') as ds:
-        if 'cf' in ds.attrs or 'CF' in ds.attrs:
+        if is_cf(ds):
             iscf = True
         else:
             iscf = False
@@ -605,6 +609,7 @@ def ds_add_lat_lon(ds):
         name='lat',
         attrs={'units': 'degree_north',
                'long_name': 'Latitude',
+               'standard_name': 'latitude',
                'epic_code': 500})
 
     ds['lon'] = xr.DataArray(
@@ -613,6 +618,7 @@ def ds_add_lat_lon(ds):
         name='lon',
         attrs={'units': 'degree_east',
                'long_name': 'Longitude',
+               'standard_name': 'longitude',
                'epic_code': 502})
 
     return ds
@@ -621,21 +627,25 @@ def ds_add_lat_lon(ds):
 def shift_time(ds, timeshift):
     """Shift time to middle of burst"""
 
-    # shift times to center of ensemble
-    ds['time'] = ds['time'] + np.timedelta64(int(timeshift), 's')
-    print('Time shifted by %.f s' % int(timeshift))
-    if not timeshift.is_integer():
-        warnings.warn(
-            'time offset of %.3f s was adjusted to %.f s for shifting time' %
-            (timeshift, int(timeshift)))
+    if timeshift != 0:
+        # shift times to center of ensemble
+        ds['time'] = ds['time'] + np.timedelta64(int(timeshift), 's')
+        print('Time shifted by %.f s' % int(timeshift))
+        if not timeshift.is_integer():
+            warnings.warn(
+                'time offset of %.3f s was adjusted to %.f s for shifting time' %
+                (timeshift, int(timeshift)))
 
     if 'ClockError' in ds.attrs:
         if ds.attrs['ClockError'] != 0:
             # note negative on ds.attrs['ClockError']
             ds['time'] = (ds['time'] +
                           np.timedelta64(-ds.attrs['ClockError'], 's'))
-            print('Time shifted by {:d} s from ClockError'.format(
-                -ds.attrs['ClockError']))
+
+        histtext = 'Time shifted by {:d} s from ClockError. '.format(
+            -ds.attrs['ClockError'])
+
+        insert_history(ds, histtext)
 
     return ds
 

@@ -604,11 +604,13 @@ def update_attrs(ds, waves=False):
     ds['lat'].attrs.update(
         {'units': 'degree_north',
          'long_name': 'Latitude',
+         'standard_name': 'latitude',
          'epic_code': 500})
 
     ds['lon'].attrs.update(
         {'units': 'degree_east',
          'long_name': 'Longitude',
+         'standard_name': 'longitude',
          'epic_code': 502})
 
     if 'position_datum' in ds.attrs:
@@ -699,9 +701,9 @@ def update_attrs(ds, waves=False):
         ds['burst'].attrs.update(
             {'units': 'count',
              'long_name': 'Record number'})
-        ds['burst'].encoding['_FillValue'] = 1e35
+        # ds['burst'].encoding['_FillValue'] = 1e35 # don't want this to have a _FillValue
 
-        ds['cellpos'].encoding['_FillValue'] = 1e35
+        # ds['cellpos'].encoding['_FillValue'] = 1e35 # don't want this to have a _FillValue
 
     return ds
 
@@ -733,6 +735,9 @@ def ds_add_attrs(ds, waves=False):
         var.encoding['_FillValue'] = 1e35
 
     ds.attrs['COMPOSITE'] = np.int32(0)
+
+    if utils.is_cf(ds):
+        ds.attrs['featureType'] = 'timeSeriesProfile'
 
     # Update attributes for EPIC and STG compliance
     ds = utils.ds_coord_no_fillvalue(ds)
@@ -860,7 +865,8 @@ def ds_add_attrs(ds, waves=False):
 
     ds['bin_depth'].attrs.update(
         {'units': 'm',
-         'name': 'bin depth'})
+         'name': 'bin depth',
+         'long_name': 'bin depth'})
 
     if 'P_1ac' in ds:
         if waves:
